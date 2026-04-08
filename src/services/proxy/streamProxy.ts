@@ -13,6 +13,7 @@
 
 import TcpSocket from 'react-native-tcp-socket';
 import * as Network from 'expo-network';
+import { DeviceEventEmitter } from 'react-native';
 
 const TAG = '[StreamProxy]';
 const PROXY_PORT = 8765;
@@ -354,6 +355,7 @@ async function streamHLStoSocket(
     let isLive = true;
     let iterations = 0;
     const MAX_LIVE_ITERATIONS = 7200;
+    let consecutiveEmptyPolls = 0;
 
     // Seek: track cumulative time to skip segments
     let seekSkipDone = seekSeconds <= 0;
@@ -415,6 +417,19 @@ async function streamHLStoSocket(
       }
 
       if (isLive) {
+        if (newSegments === 0) {
+          consecutiveEmptyPolls++;
+          if (consecutiveEmptyPolls >= 3) {
+            console.log(`${TAG} Warning: ${consecutiveEmptyPolls} consecutive empty playlist polls`);
+          }
+          if (consecutiveEmptyPolls >= 5) {
+            console.log(`${TAG} HLS playlist stale — aborting, signalling re-cast`);
+            DeviceEventEmitter.emit('streamProxy:stale');
+            break;
+          }
+        } else {
+          consecutiveEmptyPolls = 0;
+        }
         await delay(newSegments === 0 ? result.nextReloadMs / 2 : result.nextReloadMs);
       }
     }
@@ -427,6 +442,10 @@ async function streamHLStoSocket(
   } catch (err) {
     console.log(`${TAG} HLS stream error:`, err);
   } finally {
+    if (!socketAlive && !signal.aborted) {
+      console.log(`${TAG} Socket died while stream active — emitting disconnect`);
+      DeviceEventEmitter.emit('streamProxy:socketLost');
+    }
     try { socket.destroy(); } catch { /* ignore */ }
     console.log(`${TAG} HLS streaming session ended`);
   }

@@ -61,13 +61,13 @@ export default function AppNavigator() {
         <Tab.Screen
           name="Devices"
           component={DevicesScreen}
-          options={{ title: 'Devices' }}
+          options={{ title: '📺 Devices' }}
         />
         <Tab.Screen
           name="NowPlaying"
           component={NowPlayingScreen}
           options={{
-            title: 'Now Playing',
+            title: '▶ Cast',
             tabBarBadge: showCastBadge ? '' : undefined,
             tabBarBadgeStyle: {
               backgroundColor:

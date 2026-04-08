@@ -349,6 +349,58 @@ export const INJECTED_JS = `
   })();
 
   console.log(TAG + ' v3 ready. DOM + MediaElement + scripts + ad blocking active.');
+
+  // =============================================
+  // 8. Poll for player instances (JWPlayer, HLS.js, Plyr, video.js)
+  // =============================================
+  function checkPlayerInstances() {
+    // JWPlayer
+    if (window.jwplayer) {
+      try {
+        var p = window.jwplayer();
+        if (p && p.getPlaylistItem) {
+          var item = p.getPlaylistItem();
+          if (item && item.file) reportStream(item.file, 'jwplayer');
+          var sources = item && item.sources;
+          if (sources) {
+            sources.forEach(function(s) { if (s.file) reportStream(s.file, 'jwplayer-source'); });
+          }
+        }
+      } catch(e) {}
+    }
+    // HLS.js
+    if (window.Hls && window.Hls.instances) {
+      window.Hls.instances.forEach(function(hls) {
+        if (hls.url) reportStream(hls.url, 'hlsjs');
+      });
+    }
+    // Plyr
+    if (window.plyr || document.querySelector('.plyr')) {
+      document.querySelectorAll('video').forEach(function(v) {
+        if (v.src) reportStream(v.src, 'plyr');
+        if (v.currentSrc) reportStream(v.currentSrc, 'plyr-currentSrc');
+      });
+    }
+    // video.js
+    if (window.videojs) {
+      try {
+        document.querySelectorAll('.video-js').forEach(function(el) {
+          var player = window.videojs(el.id);
+          if (player && player.currentSrc && typeof player.currentSrc === 'function') {
+            var src = player.currentSrc();
+            if (src) reportStream(src, 'videojs');
+          }
+        });
+      } catch(e) {}
+    }
+    // Generic: check all video elements (covers dynamically loaded players)
+    document.querySelectorAll('video').forEach(function(v) {
+      if (v.src && isStreamUrl(v.src)) reportStream(v.src, 'player-poll-video');
+      if (v.currentSrc && isStreamUrl(v.currentSrc)) reportStream(v.currentSrc, 'player-poll-currentSrc');
+    });
+  }
+  setInterval(checkPlayerInstances, 2000);
+
   true;
 })();
 `;

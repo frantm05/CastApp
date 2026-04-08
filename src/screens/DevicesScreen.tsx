@@ -9,8 +9,11 @@ import {
   Alert,
   TextInput,
 } from 'react-native';
+import { useNavigation, NavigationProp } from '@react-navigation/native';
 import { useAppStore, DLNADevice } from '../context/appStore';
 import { discoverDevices, stopDiscovery, fetchDeviceDescription } from '../services/dlna';
+
+type RootTabs = { Browser: undefined; Devices: undefined; NowPlaying: undefined };
 
 export default function DevicesScreen() {
   const {
@@ -23,7 +26,9 @@ export default function DevicesScreen() {
     setDevices,
   } = useAppStore();
 
+  const navigation = useNavigation<NavigationProp<RootTabs>>();
   const scanCount = useRef(0);
+  const hasAutoScanned = useRef(false);
   const [manualIp, setManualIp] = useState('');
   const [isProbing, setIsProbing] = useState(false);
 
@@ -33,6 +38,14 @@ export default function DevicesScreen() {
       stopDiscovery();
     };
   }, []);
+
+  // Auto-scan on first open if no devices
+  useEffect(() => {
+    if (!hasAutoScanned.current && devices.length === 0 && !isScanning) {
+      hasAutoScanned.current = true;
+      handleScan();
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleScan = useCallback(async () => {
     if (isScanning) {
@@ -97,11 +110,13 @@ export default function DevicesScreen() {
     setIsProbing(true);
     console.log('[Devices] Probing TV at:', cleanIp);
 
-    // Common UPnP device description paths used by Philips and other TVs
+    // Common UPnP device description paths — Philips/HiSense first
     const probePaths = [
+      `http://${cleanIp}:49153/description.xml`,           // Philips common (most likely)
+      `http://${cleanIp}:49152/upnp/description.xml`,      // Philips alt
+      `http://${cleanIp}:49153/upnp/RenderingControl.xml`, // Philips rendering
       `http://${cleanIp}:1925/`,                          // Philips JointSpace API
       `http://${cleanIp}:8008/ssdp/device-desc.xml`,      // Common DIAL/SSDP
-      `http://${cleanIp}:49153/description.xml`,           // Philips common
       `http://${cleanIp}:49152/description.xml`,           // Alt port
       `http://${cleanIp}:1900/description.xml`,            // SSDP port description
       `http://${cleanIp}:8080/description.xml`,            // Alt
@@ -133,8 +148,17 @@ export default function DevicesScreen() {
           Alert.alert(
             'TV Found!',
             `${device.friendlyName}${device.modelName ? ` (${device.modelName})` : ''}\n\n${
-              device.controlURL ? 'AVTransport control URL found ✓' : '⚠ No AVTransport URL — casting may not work'
-            }`
+              device.controlURL
+                ? `AVTransport control URL found ✓\n${device.controlURL}`
+                : '⚠ No AVTransport URL — casting may not work'
+            }`,
+            [
+              {
+                text: 'Go to Cast',
+                onPress: () => navigation.navigate('NowPlaying'),
+              },
+              { text: 'Stay Here' },
+            ]
           );
           break;
         }

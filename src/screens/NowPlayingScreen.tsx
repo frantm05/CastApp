@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect, useCallback } from 'react';
+import React, { useMemo, useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   ScrollView,
+  LayoutChangeEvent,
 } from 'react-native';
 import { useAppStore } from '../context/appStore';
 import { useDLNACast } from '../hooks/useDLNACast';
@@ -46,11 +47,14 @@ export default function NowPlayingScreen() {
     positionInfo,
     transportInfo,
     streamDuration,
+    localElapsed,
   } = useDLNACast();
 
   // Quality state
   const [qualities, setQualities] = useState<QualityOption[]>([]);
   const [selectedQualityIdx, setSelectedQualityIdx] = useState(-1); // -1 = auto (best)
+  const [barWidth, setBarWidth] = useState(0);
+  const qualityDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Fetch available qualities when stream changes
   useEffect(() => {
@@ -70,10 +74,11 @@ export default function NowPlayingScreen() {
   const isPaused = castingStatus === 'paused';
   const isLoading = castingStatus === 'loading';
 
-  // Current position in seconds
+  // Current position in seconds — use TV report, fallback to local elapsed
   const currentSeconds = useMemo(() => {
-    return timeToSeconds(positionInfo?.relTime);
-  }, [positionInfo]);
+    const tvPos = timeToSeconds(positionInfo?.relTime);
+    return tvPos > 0 ? tvPos : localElapsed;
+  }, [positionInfo, localElapsed]);
 
   // Total duration: prefer TV's report, fallback to proxy-tracked duration
   const totalSeconds = useMemo(() => {
@@ -96,6 +101,24 @@ export default function NowPlayingScreen() {
     seekTo(target);
   }, [currentSeconds, seekTo]);
 
+  const handleBarLayout = useCallback((e: LayoutChangeEvent) => {
+    setBarWidth(e.nativeEvent.layout.width);
+  }, []);
+
+  const handleBarTap = useCallback((locationX: number) => {
+    if (barWidth <= 0 || totalSeconds <= 0) return;
+    const targetSeconds = Math.floor((locationX / barWidth) * totalSeconds);
+    seekTo(Math.max(0, Math.min(targetSeconds, totalSeconds)));
+  }, [barWidth, totalSeconds, seekTo]);
+
+  const handleQualityChange = useCallback((idx: number, url?: string) => {
+    setSelectedQualityIdx(idx);
+    if (qualityDebounceRef.current) clearTimeout(qualityDebounceRef.current);
+    qualityDebounceRef.current = setTimeout(() => {
+      cast(url);
+    }, 300);
+  }, [cast]);
+
   const statusConfig = useMemo(() => {
     switch (castingStatus) {
       case 'playing':
@@ -115,7 +138,27 @@ export default function NowPlayingScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      {/* ── Onboarding when fully idle ── */}
+      {!selectedStream && !selectedDevice && !isActive && (
+        <View style={styles.onboardingCard}>
+          <Text style={styles.onboardingTitle}>Get Started</Text>
+          <View style={styles.onboardingStep}>
+            <Text style={styles.onboardingStepNum}>1</Text>
+            <Text style={styles.onboardingStepText}>Open Browser tab, find a video</Text>
+          </View>
+          <View style={styles.onboardingStep}>
+            <Text style={styles.onboardingStepNum}>2</Text>
+            <Text style={styles.onboardingStepText}>Go to Devices tab, scan for your TV</Text>
+          </View>
+          <View style={styles.onboardingStep}>
+            <Text style={styles.onboardingStepNum}>3</Text>
+            <Text style={styles.onboardingStepText}>Come back here and tap Cast</Text>
+          </View>
+        </View>
+      )}
+
       {/* ── Stream Info ── */}
+      {(selectedStream || selectedDevice || isActive) && (
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Selected Stream</Text>
         {selectedStream ? (
@@ -147,8 +190,10 @@ export default function NowPlayingScreen() {
           </View>
         )}
       </View>
+      )}
 
       {/* ── Device Info ── */}
+      {(selectedStream || selectedDevice || isActive) && (
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Target Device</Text>
         {selectedDevice ? (
@@ -177,6 +222,7 @@ export default function NowPlayingScreen() {
           </View>
         )}
       </View>
+      )}
 
       {/* ── Status ── */}
       <View style={styles.statusSection}>
@@ -195,9 +241,15 @@ export default function NowPlayingScreen() {
             <Text style={styles.positionTime}>
               {secondsToDisplay(currentSeconds)}
             </Text>
-            <View style={styles.positionBarBg}>
+            <TouchableOpacity
+              style={styles.positionBarBg}
+              activeOpacity={0.7}
+              onLayout={handleBarLayout}
+              onPress={(e) => handleBarTap(e.nativeEvent.locationX)}
+            >
               <View style={[styles.positionBarFill, { width: `${progress * 100}%` }]} />
-            </View>
+              <View style={[styles.positionThumb, { left: `${progress * 100}%` }]} />
+            </TouchableOpacity>
             <Text style={styles.positionTime}>
               {secondsToDisplay(totalSeconds)}
             </Text>
@@ -243,17 +295,14 @@ export default function NowPlayingScreen() {
         </View>
       )}
 
-      {/* ── Quality during playback ── */}
+      {/* ── Quality during playback (above controls) ── */}
       {qualities.length > 1 && isActive && (
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Quality</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.qualityRow}>
             <TouchableOpacity
               style={[styles.qualityChip, selectedQualityIdx === -1 && styles.qualityChipSelected]}
-              onPress={() => {
-                setSelectedQualityIdx(-1);
-                cast(undefined);
-              }}
+              onPress={() => handleQualityChange(-1, undefined)}
               disabled={isLoading}
             >
               <Text style={[styles.qualityChipText, selectedQualityIdx === -1 && styles.qualityChipTextSelected]}>
@@ -264,10 +313,7 @@ export default function NowPlayingScreen() {
               <TouchableOpacity
                 key={idx}
                 style={[styles.qualityChip, selectedQualityIdx === idx && styles.qualityChipSelected]}
-                onPress={() => {
-                  setSelectedQualityIdx(idx);
-                  cast(q.url);
-                }}
+                onPress={() => handleQualityChange(idx, q.url)}
                 disabled={isLoading}
               >
                 <Text style={[styles.qualityChipText, selectedQualityIdx === idx && styles.qualityChipTextSelected]}>
@@ -384,6 +430,43 @@ const styles = StyleSheet.create({
   content: {
     padding: 16,
     paddingBottom: 40,
+  },
+  onboardingCard: {
+    backgroundColor: '#1a1a2e',
+    borderRadius: 16,
+    padding: 24,
+    marginBottom: 20,
+    alignItems: 'center',
+    gap: 16,
+  },
+  onboardingTitle: {
+    color: '#00d4ff',
+    fontSize: 20,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  onboardingStep: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    width: '100%',
+  },
+  onboardingStepNum: {
+    color: '#00d4ff',
+    fontSize: 20,
+    fontWeight: 'bold',
+    width: 32,
+    height: 32,
+    textAlign: 'center',
+    lineHeight: 32,
+    backgroundColor: '#0d2a3e',
+    borderRadius: 16,
+    overflow: 'hidden',
+  },
+  onboardingStepText: {
+    color: '#ccc',
+    fontSize: 15,
+    flex: 1,
   },
   section: {
     marginBottom: 18,
@@ -512,14 +595,23 @@ const styles = StyleSheet.create({
   },
   positionBarBg: {
     flex: 1,
-    height: 4,
-    backgroundColor: '#2a2a4a',
-    borderRadius: 2,
+    height: 20,
+    justifyContent: 'center',
+    paddingVertical: 8,
   },
   positionBarFill: {
     height: 4,
     backgroundColor: '#00d4ff',
     borderRadius: 2,
+  },
+  positionThumb: {
+    position: 'absolute',
+    top: 4,
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#00d4ff',
+    marginLeft: -7,
   },
   debugInfo: {
     color: '#444',

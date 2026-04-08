@@ -25,6 +25,8 @@ const SEARCH_TARGETS = [
   'urn:schemas-upnp-org:device:MediaRenderer:1',
   'urn:schemas-upnp-org:service:AVTransport:1',
   'ssdp:all', // fallback: discover everything, filter later
+  'upnp:rootdevice',
+  'urn:schemas-upnp-org:device:Basic:1',
 ];
 
 function buildSearchMessage(searchTarget: string): string {
@@ -32,7 +34,7 @@ function buildSearchMessage(searchTarget: string): string {
     'M-SEARCH * HTTP/1.1',
     `HOST: ${SSDP_MULTICAST_ADDRESS}:${SSDP_PORT}`,
     'MAN: "ssdp:discover"',
-    'MX: 3',
+    'MX: 4',
     `ST: ${searchTarget}`,
     'USER-AGENT: CastApp/1.0 UPnP/1.1',
     '',
@@ -207,7 +209,7 @@ export function stopDiscovery(): void {
  */
 export function discoverDevices(
   onDeviceFound: (device: DLNADevice) => void,
-  timeoutMs: number = 6000
+  timeoutMs: number = 10000
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     // Clean up any previous scan
@@ -219,13 +221,21 @@ export function discoverDevices(
     console.log(TAG, '=== Starting SSDP discovery ===');
     console.log(TAG, 'Timeout:', timeoutMs, 'ms');
 
-    try {
+    const tryBind = (port: number) => {
       const socket = dgram.createSocket({ type: 'udp4' });
       activeSocket = socket;
 
       socket.once('listening', () => {
         const address = socket.address();
         console.log(TAG, 'Socket bound to port:', address.port);
+
+        // Join multicast group so we receive SSDP replies on Android
+        try {
+          socket.addMembership(SSDP_MULTICAST_ADDRESS);
+          console.log(TAG, 'Joined multicast group', SSDP_MULTICAST_ADDRESS);
+        } catch (e) {
+          console.log(TAG, 'addMembership failed (non-fatal):', e);
+        }
 
         // Send M-SEARCH for each search target
         // Stagger sends slightly to avoid packet loss
@@ -300,12 +310,20 @@ export function discoverDevices(
         pendingFetches.push(fetchPromise);
       });
 
-      socket.on('error', (err: Error) => {
+      socket.on('error', (err: Error & { code?: string }) => {
+        // If port 1900 fails, fall back to ephemeral port
+        if (port === SSDP_PORT && err.code === 'EADDRINUSE') {
+          console.log(TAG, 'Port 1900 busy, falling back to ephemeral port');
+          try { socket.close(); } catch { /* ignore */ }
+          activeSocket = null;
+          tryBind(0);
+          return;
+        }
         console.log(TAG, 'Socket error:', err.message);
       });
 
-      // Bind to a random available port
-      socket.bind(0);
+      // Bind to explicit address, try fixed port 1900 first then fallback to 0
+      socket.bind({ port, address: '0.0.0.0' });
 
       // Set timeout to stop discovery
       discoveryTimeout = setTimeout(async () => {
@@ -319,6 +337,11 @@ export function discoverDevices(
         console.log(TAG, '=== Discovery complete ===');
         resolve();
       }, timeoutMs);
+    };
+
+    try {
+      // Try port 1900 first (some Android versions need it), fall back to ephemeral
+      tryBind(SSDP_PORT);
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
       console.log(TAG, 'Fatal discovery error:', message);

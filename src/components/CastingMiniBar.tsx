@@ -7,6 +7,7 @@ import {
   pause as dlnaPause,
   stop as dlnaStop,
 } from '../services/dlna';
+import { getStreamTotalDuration } from '../services/proxy/streamProxy';
 
 type RootTabs = { Browser: undefined; Devices: undefined; NowPlaying: undefined };
 
@@ -71,6 +72,15 @@ export default function CastingMiniBar() {
       onPress={() => navigation.navigate('NowPlaying')}
       activeOpacity={0.8}
     >
+      {/* Thin progress bar at top */}
+      <View style={styles.progressTrack}>
+        <View style={[styles.progressFill, {
+          width: castingStatus === 'playing' ? '50%' : castingStatus === 'loading' ? '20%' : '0%',
+        }]} />
+      </View>
+
+      {/* Content row */}
+      <View style={styles.contentRow}>
       {/* Status dot */}
       <View
         style={[
@@ -106,19 +116,33 @@ export default function CastingMiniBar() {
           <Text style={[styles.controlIcon, styles.stopIcon]}>⏹</Text>
         </TouchableOpacity>
       </View>
+      </View>
     </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    flexDirection: 'row',
-    alignItems: 'center',
     backgroundColor: '#1a2a3e',
     paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingTop: 2,
+    paddingBottom: 10,
     borderTopWidth: 1,
     borderTopColor: '#00d4ff44',
+  },
+  progressTrack: {
+    height: 2,
+    backgroundColor: '#2a2a4a',
+    width: '100%',
+    marginBottom: 8,
+  },
+  progressFill: {
+    height: 2,
+    backgroundColor: '#00d4ff',
+  },
+  contentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 10,
   },
   dot: {

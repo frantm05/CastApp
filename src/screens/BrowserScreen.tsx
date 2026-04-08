@@ -373,6 +373,23 @@ export default function BrowserScreen() {
           />
         </View>
       )}
+
+      {/* Floating Cast Button */}
+      {extractedStreams.length > 0 && selectedDevice?.controlURL && (
+        <TouchableOpacity
+          style={styles.fab}
+          onPress={() => {
+            const latest = extractedStreams[extractedStreams.length - 1];
+            selectStream(latest);
+            navigation.navigate('NowPlaying');
+          }}
+          activeOpacity={0.8}
+        >
+          <Text style={styles.fabText}>
+            🎬 Cast ({extractedStreams[extractedStreams.length - 1].type === 'm3u8' ? 'HLS' : extractedStreams[extractedStreams.length - 1].type.toUpperCase()})
+          </Text>
+        </TouchableOpacity>
+      )}
     </KeyboardAvoidingView>
   );
 }
@@ -543,5 +560,24 @@ const styles = StyleSheet.create({
     color: '#555',
     fontSize: 10,
     marginTop: 3,
+  },
+  fab: {
+    position: 'absolute',
+    bottom: 20,
+    right: 16,
+    backgroundColor: '#00d4ff',
+    borderRadius: 28,
+    paddingHorizontal: 22,
+    paddingVertical: 14,
+    elevation: 6,
+    shadowColor: '#00d4ff',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 8,
+  },
+  fabText: {
+    color: '#000',
+    fontWeight: 'bold',
+    fontSize: 15,
   },
 });

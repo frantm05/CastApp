@@ -6,7 +6,8 @@
  */
 
 import { useRef, useState, useCallback, useEffect } from 'react';
-import { Alert } from 'react-native';
+import { Alert, DeviceEventEmitter } from 'react-native';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useAppStore } from '../context/appStore';
 import {
   castStream,
@@ -37,6 +38,7 @@ export interface CastHook {
   positionInfo: PositionInfo | null;
   isPolling: boolean;
   streamDuration: number;
+  localElapsed: number;
 }
 
 export function useDLNACast(): CastHook {
@@ -44,6 +46,7 @@ export function useDLNACast(): CastHook {
     selectedStream,
     selectedDevice,
     isCasting,
+    castingStatus,
     setCasting,
     setCastingStatus,
   } = useAppStore();
@@ -52,9 +55,13 @@ export function useDLNACast(): CastHook {
   const [transportInfo, setTransportInfo] = useState<TransportInfo | null>(null);
   const [positionInfo, setPositionInfo] = useState<PositionInfo | null>(null);
   const [streamDuration, setStreamDuration] = useState(0);
+  const [localElapsed, setLocalElapsed] = useState(0);
   const isPollingRef = useRef(false);
   const proxyUrlRef = useRef<string | null>(null);
   const deviceHostRef = useRef<string | undefined>(undefined);
+  const castStartRef = useRef<number>(0);
+  const localTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const qualityDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const getControlURL = useCallback((): string | null => {
     if (!selectedDevice?.controlURL) {
@@ -185,6 +192,7 @@ export function useDLNACast(): CastHook {
       console.log(TAG, 'Proxy URL for TV:', proxyUrl);
 
       await castStream(controlURL, proxyUrl, 'CastApp Stream');
+      castStartRef.current = Date.now();
       setCastingStatus('playing');
       console.log(TAG, 'Cast successful — playback started via proxy');
     } catch (err: unknown) {
@@ -268,6 +276,101 @@ export function useDLNACast(): CastHook {
     [getControlURL, setCastingStatus]
   );
 
+  // ────────────────────────────────────
+  // Keep-awake during casting
+  // ────────────────────────────────────
+  useEffect(() => {
+    if (isCasting) {
+      activateKeepAwakeAsync('castapp-casting').catch(() => {});
+    } else {
+      deactivateKeepAwake('castapp-casting');
+    }
+    return () => {
+      deactivateKeepAwake('castapp-casting');
+    };
+  }, [isCasting]);
+
+  // ────────────────────────────────────
+  // Local elapsed timer fallback
+  // ────────────────────────────────────
+  useEffect(() => {
+    if (castingStatus === 'playing') {
+      if (!castStartRef.current) castStartRef.current = Date.now();
+      localTimerRef.current = setInterval(() => {
+        setLocalElapsed(Math.floor((Date.now() - castStartRef.current) / 1000));
+      }, 1000);
+    } else if (castingStatus === 'paused') {
+      if (localTimerRef.current) {
+        clearInterval(localTimerRef.current);
+        localTimerRef.current = null;
+      }
+    } else if (castingStatus === 'stopped' || castingStatus === 'idle') {
+      if (localTimerRef.current) {
+        clearInterval(localTimerRef.current);
+        localTimerRef.current = null;
+      }
+      castStartRef.current = 0;
+      setLocalElapsed(0);
+    }
+    return () => {
+      if (localTimerRef.current) {
+        clearInterval(localTimerRef.current);
+        localTimerRef.current = null;
+      }
+    };
+  }, [castingStatus]);
+
+  // ────────────────────────────────────
+  // Stream disconnect / stale detection
+  // ────────────────────────────────────
+  useEffect(() => {
+    const handleSocketLost = () => {
+      if (!isCasting) return;
+      console.log(TAG, 'Stream proxy socket lost while casting');
+      Alert.alert(
+        'Stream Ended',
+        'The stream connection was lost. Re-cast?',
+        [
+          { text: 'Cancel', onPress: () => { setCastingStatus('stopped'); setCasting(false); } },
+          { text: 'Re-cast', onPress: () => cast() },
+        ]
+      );
+    };
+    const handleStale = () => {
+      if (!isCasting) return;
+      console.log(TAG, 'Stream proxy reported stale playlist');
+      Alert.alert(
+        'Stream Stale',
+        'The stream playlist stopped updating. Re-cast?',
+        [
+          { text: 'Cancel', onPress: () => { setCastingStatus('stopped'); setCasting(false); } },
+          { text: 'Re-cast', onPress: () => cast() },
+        ]
+      );
+    };
+    const sub1 = DeviceEventEmitter.addListener('streamProxy:socketLost', handleSocketLost);
+    const sub2 = DeviceEventEmitter.addListener('streamProxy:stale', handleStale);
+    return () => {
+      sub1.remove();
+      sub2.remove();
+    };
+  }, [isCasting, cast, setCasting, setCastingStatus]);
+
+  // Detect unexpected stop from TV
+  useEffect(() => {
+    if (castingStatus === 'stopped' && isCasting) {
+      console.log(TAG, 'TV stopped unexpectedly while isCasting=true');
+      Alert.alert(
+        'Stream Ended',
+        'The TV stopped playback. Re-cast?',
+        [
+          { text: 'Dismiss', onPress: () => setCasting(false) },
+          { text: 'Re-cast', onPress: () => cast() },
+        ]
+      );
+    }
+  }, [castingStatus, isCasting, cast, setCasting]);
+
   return {
     cast,
     play,
@@ -278,5 +381,6 @@ export function useDLNACast(): CastHook {
     positionInfo,
     isPolling: isPollingRef.current,
     streamDuration,
+    localElapsed,
   };
 }
